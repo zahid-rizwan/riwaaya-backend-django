@@ -1,0 +1,972 @@
+{
+	"info": {
+		"_postman_id": "73c68df8-cf15-4ba3-bf30-b30f0f156d95",
+		"name": "Riwaaya Threads API",
+		"description": "API requests for the Riwaaya Threads production-grade multi-vendor marketplace backend.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"item": [
+		{
+			"name": "1. Authentication",
+			"item": [
+				{
+					"name": "Register Customer",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"username\": \"maryam_couture\",\n    \"email\": \"maryam@example.com\",\n    \"password\": \"MaryamPass123!\",\n    \"phone_number\": \"9876543210\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/accounts/register/customer/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"accounts",
+								"register",
+								"customer",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Register Seller",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"username\": \"riwaaya_seller\",\n    \"email\": \"seller@riwaaya.com\",\n    \"password\": \"SellerPass123!\",\n    \"business_name\": \"Riwaaya Ethnic Wear\",\n    \"gst_number\": \"07AAAAA1111A1Z1\",\n    \"pan\": \"ABCDE1234F\",\n    \"business_address\": \"123 Fashion Street, New Delhi, India\",\n    \"pickup_address\": \"123 Warehouse Lane, New Delhi, India\",\n    \"contact_phone\": \"9999888877\",\n    \"contact_email\": \"sales@riwaaya.com\",\n    \"bank_details\": {\n        \"bank_name\": \"State Bank of India\",\n        \"account_number\": \"12345678901\",\n        \"ifsc_code\": \"SBIN0001234\",\n        \"account_holder\": \"Riwaaya Retailers\"\n    }\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/accounts/register/seller/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"accounts",
+								"register",
+								"seller",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Obtain JWT Token (Login)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"var jsonData = pm.response.json();",
+									"if(jsonData && jsonData.data && jsonData.data.access){",
+									"    pm.environment.set(\"access_token\", jsonData.data.access);",
+									"    pm.environment.set(\"refresh_token\", jsonData.data.refresh);",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"username\": \"maryam_couture\",\n    \"password\": \"MaryamPass123!\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/accounts/token/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"accounts",
+								"token",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Refresh JWT Token",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"refresh\": \"{{refresh_token}}\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/accounts/token/refresh/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"accounts",
+								"token",
+								"refresh",
+								""
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "2. Customer Profile & Addresses",
+			"item": [
+				{
+					"name": "Get Profile details",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/accounts/me/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"accounts",
+								"me",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "List Addresses",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/accounts/addresses/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"accounts",
+								"addresses",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Create Address",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"address_type\": \"SHIPPING\",\n    \"is_default\": true,\n    \"recipient_name\": \"Maryam Siddiqui\",\n    \"phone_number\": \"9876543210\",\n    \"street_address\": \"Apartment 4B, Regency Heights, Vasant Kunj\",\n    \"city\": \"New Delhi\",\n    \"state\": \"Delhi\",\n    \"postal_code\": \"110070\",\n    \"country\": \"India\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/accounts/addresses/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"accounts",
+								"addresses",
+								""
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "3. Catalog & Search",
+			"item": [
+				{
+					"name": "List Categories",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/catalog/categories/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"catalog",
+								"categories",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "List Category Products",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/catalog/categories/womens-wear/products/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"catalog",
+								"categories",
+								"womens-wear",
+								"products",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "List & Search Catalog",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/catalog/products/?search=pakistani",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"catalog",
+								"products",
+								""
+							],
+							"query": [
+								{
+									"key": "search",
+									"value": "pakistani"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Product Detail (Slug)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/catalog/products/pink-lawn-suit/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"catalog",
+								"products",
+								"pink-lawn-suit",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Full-text Search Catalog",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/api/v1/search/?q=silk suit",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"search",
+								""
+							],
+							"query": [
+								{
+									"key": "q",
+									"value": "silk suit"
+								}
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "4. Shopping Cart",
+			"item": [
+				{
+					"name": "Get User Cart",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/cart/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"cart",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Add Variant to Cart",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"variant_id\": \"b5d3c8a4-0c21-4f91-88df-6bf4f3214a1e\",\n    \"quantity\": 2\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/cart/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"cart",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Update Cart Item Qty",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"variant_id\": \"b5d3c8a4-0c21-4f91-88df-6bf4f3214a1e\",\n    \"quantity\": 5\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/cart/update/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"cart",
+								"update",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Remove Item from Cart",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/cart/remove/b5d3c8a4-0c21-4f91-88df-6bf4f3214a1e/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"cart",
+								"remove",
+								"b5d3c8a4-0c21-4f91-88df-6bf4f3214a1e",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Clear Shopping Cart",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/cart/clear/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"cart",
+								"clear",
+								""
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "5. Checkout & Orders",
+			"item": [
+				{
+					"name": "Checkout Cart (Create Order)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"shipping_address_id\": \"fa322409-5a86-4e50-8b9a-41f89c67bc2f\",\n    \"billing_address_id\": \"fa322409-5a86-4e50-8b9a-41f89c67bc2f\",\n    \"coupon_code\": \"EID2026\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/orders/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"orders",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "List Customer Orders",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/orders/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"orders",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Order Detail (UUID)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/orders/e271a3d9-9598-4c91-bd80-607823abfd30/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"orders",
+								"e271a3d9-9598-4c91-bd80-607823abfd30",
+								""
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "6. Seller Administration",
+			"item": [
+				{
+					"name": "Get Seller own Profile",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/sellers/me/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"sellers",
+								"me",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Update Seller Profile",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"business_name\": \"Riwaaya Premium Ethnic Couture\",\n    \"business_address\": \"45 Main Mall, Delhi\",\n    \"pickup_address\": \"Warehouse B, Delhi\",\n    \"bank_details\": {\n        \"bank_name\": \"HDFC Bank\",\n        \"account_number\": \"987654321098\",\n        \"ifsc_code\": \"HDFC0000123\",\n        \"account_holder\": \"Riwaaya Couture Pvt Ltd\"\n    },\n    \"contact_phone\": \"9876543210\",\n    \"contact_email\": \"partner@riwaaya.com\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/sellers/me/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"sellers",
+								"me",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Seller list products",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/catalog/seller/products/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"catalog",
+								"seller",
+								"products",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Seller Create Product",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Chanderi Silk Salwar Kameez\",\n    \"slug\": \"chanderi-silk-salwar-kameez\",\n    \"description\": \"Chanderi Silk suit embellished with fine hand zardozi work.\",\n    \"category\": 2\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/catalog/seller/products/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"catalog",
+								"seller",
+								"products",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Seller Add Product Variant",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"sku\": \"CHAND-SILK-M-RED\",\n    \"price\": \"4500.00\",\n    \"discount_price\": \"3999.00\",\n    \"attribute_values\": [\n        3,\n        7\n    ]\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/catalog/seller/products/a51132bb-c67d-41a2-b883-9b88a9e0132b/variants/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"catalog",
+								"seller",
+								"products",
+								"a51132bb-c67d-41a2-b883-9b88a9e0132b",
+								"variants",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Seller View incoming Orders",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}",
+								"type": "text"
+							}
+						],
+						"url": {
+							"raw": "{{base_url}}/api/v1/orders/seller/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"orders",
+								"seller",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Admin Verify Seller Profile",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{access_token}}",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"verification_status\": \"APPROVED\",\n    \"commission_percentage\": \"12.50\"\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/sellers/e231bc5a-442b-426b-80df-52054bdf12c3/verify/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"sellers",
+								"e231bc5a-442b-426b-80df-52054bdf12c3",
+								"verify",
+								""
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "7. Webhooks (Simulated)",
+			"item": [
+				{
+					"name": "Razorpay Success Webhook Callback",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "X-Razorpay-Signature",
+								"value": "mock_signature_of_webhook",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"entity\": \"event\",\n    \"account_id\": \"acc_mock\",\n    \"event\": \"payment.captured\",\n    \"contains\": [\n        \"payment\"\n    ],\n    \"payload\": {\n        \"payment\": {\n            \"entity\": {\n                \"id\": \"pay_mock_12345\",\n                \"entity\": \"payment\",\n                \"amount\": 385000,\n                \"currency\": \"INR\",\n                \"status\": \"captured\",\n                \"order_id\": \"order_mock_fa322409-5a86-4e50-8b9a-41f89c67bc2f\",\n                \"method\": \"card\"\n            }\n        }\n    }\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/payments/webhook/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"payments",
+								"webhook",
+								""
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Razorpay Failure Webhook Callback",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "X-Razorpay-Signature",
+								"value": "mock_signature_of_webhook",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"entity\": \"event\",\n    \"account_id\": \"acc_mock\",\n    \"event\": \"payment.failed\",\n    \"contains\": [\n        \"payment\"\n    ],\n    \"payload\": {\n        \"payment\": {\n            \"entity\": {\n                \"id\": \"pay_mock_54321\",\n                \"entity\": \"payment\",\n                \"amount\": 385000,\n                \"currency\": \"INR\",\n                \"status\": \"failed\",\n                \"order_id\": \"order_mock_fa322409-5a86-4e50-8b9a-41f89c67bc2f\",\n                \"method\": \"card\",\n                \"error_code\": \"BAD_REQUEST_PAYMENT_CANCELLED_BY_USER\",\n                \"error_description\": \"Payment was cancelled by the user\"\n            }\n        }\n    }\n}",
+							"options": {
+								"raw": {
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{base_url}}/api/v1/payments/webhook/",
+							"host": [
+								"{{base_url}}"
+							],
+							"path": [
+								"api",
+								"v1",
+								"payments",
+								"webhook",
+								""
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8000",
+			"type": "string"
+		},
+		{
+			"key": "access_token",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "refresh_token",
+			"value": "",
+			"type": "string"
+		}
+	]
+}
