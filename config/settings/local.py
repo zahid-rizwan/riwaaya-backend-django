@@ -5,7 +5,12 @@ DEBUG = True
 
 SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-local-dev-key-riwaaya-threads')
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '[::1]']
+ALLOWED_HOSTS = [
+	'localhost',
+	'127.0.0.1',
+	'[::1]',
+	'app.riwaayathreads.com',
+]
 
 CSRF_TRUSTED_ORIGINS = [
 	'http://localhost:3000',
@@ -14,6 +19,7 @@ CSRF_TRUSTED_ORIGINS = [
 	'http://127.0.0.1:3000',
 	'http://127.0.0.1:3001',
 	'http://127.0.0.1:3002',
+	'https://app.riwaayathreads.com',
 ]
 
 # CORS Configuration
