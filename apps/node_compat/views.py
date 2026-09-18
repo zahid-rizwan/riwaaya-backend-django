@@ -5,6 +5,8 @@ import os
 from uuid import UUID
 
 from django.contrib.auth import authenticate, get_user_model
+from django.core.files.storage import default_storage
+from django.core.files.base import ContentFile
 from django.db import transaction
 from django.db.models import Count, Sum
 from django.utils.text import slugify
@@ -14,7 +16,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.accounts.models import Address, UserRole
-from apps.catalog.models import Category, Product, Variant
+from apps.catalog.models import Category, Product, ProductImage, Variant
 from apps.catalog.serializers import ProductSerializer
 from apps.inventory.models import Inventory
 from apps.orders.models import Order, OrderItem, OrderStatus
@@ -153,6 +155,9 @@ class ProductListCreateView(APIView):
             product = Product.objects.create(seller=seller, category=category, name=name, slug=f'{slugify(name)}-{str(UUID(int=__import__("uuid").uuid4().int))[:8]}', description=request.data.get('description', 'Handcrafted luxury apparel.'), is_active=request.data.get('status', 'APPROVED') != 'HIDDEN')
             variant = Variant.objects.create(product=product, sku=sku, price=Decimal(str(request.data.get('price', 0) or 0)))
             Inventory.objects.create(variant=variant, available_stock=int(request.data.get('stock', 0) or 0))
+            for image_key in request.data.get('imageKeys', []):
+                if image_key:
+                    ProductImage.objects.create(variant=variant, image=str(image_key))
         return node_response(product_data(request, product), 'Product created successfully', 201)
 
 
@@ -180,7 +185,13 @@ class ProductUploadView(APIView):
     def post(self, request):
         files = request.FILES.getlist('images')
         if not files: return Response({'message': 'No image files uploaded'}, status=400)
-        return node_response({'urls': [request.build_absolute_uri(f'/media/{f.name}') for f in files]}, 'Images uploaded successfully')
+        keys = []
+        urls = []
+        for uploaded_file in files:
+            key = default_storage.save(f'product_images/{UUID(int=__import__("uuid").uuid4().int)}-{uploaded_file.name}', ContentFile(uploaded_file.read()))
+            keys.append(key)
+            urls.append(default_storage.url(key))
+        return node_response({'urls': urls, 'keys': keys}, 'Images uploaded successfully')
 
 
 class CartView(APIView):
