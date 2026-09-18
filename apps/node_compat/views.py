@@ -22,6 +22,7 @@ from apps.inventory.models import Inventory
 from apps.orders.models import Order, OrderItem, OrderStatus
 from apps.payments.models import Payment, PaymentStatus
 from apps.sellers.models import SellerProfile, VerificationStatus
+from apps.node_compat.models import GuestCart
 
 User = get_user_model()
 
@@ -196,19 +197,27 @@ class ProductUploadView(APIView):
 
 class CartView(APIView):
     permission_classes = (permissions.AllowAny,)
-    def _key(self, request):
-        if request.user.is_authenticated:
-            return f'user:{request.user.id}'
-        session_id = (
+    def _guest_session_id(self, request):
+        return (
             request.headers.get('x-session-id')
             or request.query_params.get('sessionId')
             or request.data.get('sessionId')
             or 'default_guest_session'
         )
-        return f'session:{session_id}'
-    def _cart(self, request): return request.session.get(self._key(request), [])
+    def _key(self, request):
+        if request.user.is_authenticated:
+            return f'user:{request.user.id}'
+        return f'session:{self._guest_session_id(request)}'
+    def _cart(self, request):
+        if not request.user.is_authenticated:
+            return GuestCart.objects.filter(session_id=self._guest_session_id(request)).values_list('items', flat=True).first() or []
+        return request.session.get(self._key(request), [])
     def _response(self, request, items, message='Cart details fetched'):
-        request.session[self._key(request)] = items; subtotal = sum(Decimal(str(i['price'])) * i['quantity'] for i in items); shipping = 0 if subtotal == 0 or subtotal >= 5000 else 350
+        if not request.user.is_authenticated:
+            GuestCart.objects.update_or_create(session_id=self._guest_session_id(request), defaults={'items': items})
+        else:
+            request.session[self._key(request)] = items
+        subtotal = sum(Decimal(str(i['price'])) * i['quantity'] for i in items); shipping = 0 if subtotal == 0 or subtotal >= 5000 else 350
         return node_response({'items': items, 'subtotal': float(subtotal), 'shipping': shipping, 'discount': 0, 'grandTotal': float(subtotal + shipping)}, message)
     def get(self, request): return self._response(request, self._cart(request))
     def post(self, request):
@@ -217,7 +226,7 @@ class CartView(APIView):
         if existing: existing['quantity'] += item['quantity']
         else: items.append(item)
         return self._response(request, items, 'Item added to bag')
-    def delete(self, request): request.session[self._key(request)] = []; return self._response(request, [], 'Cart cleared')
+    def delete(self, request): return self._response(request, [], 'Cart cleared')
 
 
 class CartItemView(CartView):
