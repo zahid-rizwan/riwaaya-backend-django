@@ -222,7 +222,9 @@ class CartView(APIView):
     def get(self, request): return self._response(request, self._cart(request))
     def post(self, request):
         product_id, size = str(request.data.get('productId')), request.data.get('size', 'M'); product = Product.objects.get(id=product_id); variant = product.variants.first(); items = self._cart(request); existing = next((i for i in items if i['productId'] == product_id and i['size'] == size), None)
-        item = {'id': f'cart_{product_id}_{size}', 'productId': product_id, 'name': product.name, 'category': product.category.slug if product.category else 'suits', 'price': float(variant.discount_price or variant.price) if variant else 0, 'image': '', 'size': size, 'color': request.data.get('color', 'Ivory'), 'quantity': int(request.data.get('quantity', 1))}
+        stored_image = variant.images.first() if variant else None
+        image_url = request.build_absolute_uri(stored_image.image.url) if stored_image else request.data.get('image', '')
+        item = {'id': f'cart_{product_id}_{size}', 'productId': product_id, 'name': product.name, 'category': product.category.slug if product.category else 'suits', 'price': float(variant.discount_price or variant.price) if variant else 0, 'image': image_url, 'size': size, 'color': request.data.get('color', 'Ivory'), 'quantity': int(request.data.get('quantity', 1))}
         if existing: existing['quantity'] += item['quantity']
         else: items.append(item)
         return self._response(request, items, 'Item added to bag')
