@@ -11,13 +11,16 @@ allowed_hosts_str = os.environ.get('ALLOWED_HOSTS')
 if allowed_hosts_str:
     ALLOWED_HOSTS = [host.strip() for host in allowed_hosts_str.split(',')]
 else:
-    ALLOWED_HOSTS = ['app.riwaayathreads.com']
+    ALLOWED_HOSTS = ['app.riwaayathreads.com', 'www.riwaayathreads.com']
 
 csrf_trusted_origins_str = os.environ.get('CSRF_TRUSTED_ORIGINS')
 if csrf_trusted_origins_str:
     CSRF_TRUSTED_ORIGINS = [origin.strip() for origin in csrf_trusted_origins_str.split(',')]
 else:
-    CSRF_TRUSTED_ORIGINS = ['https://app.riwaayathreads.com']
+    CSRF_TRUSTED_ORIGINS = [
+        'https://app.riwaayathreads.com',
+        'https://www.riwaayathreads.com',
+    ]
 
 # Security Headers & SSL Settings
 SECURE_SSL_REDIRECT = os.environ.get('SECURE_SSL_REDIRECT', 'True') == 'True'
@@ -35,4 +38,7 @@ cors_origins_str = os.environ.get('CORS_ALLOWED_ORIGINS')
 if cors_origins_str:
     CORS_ALLOWED_ORIGINS = [origin.strip() for origin in cors_origins_str.split(',')]
 else:
-    CORS_ALLOWED_ORIGINS = ['https://app.riwaayathreads.com']
+    CORS_ALLOWED_ORIGINS = [
+        'https://app.riwaayathreads.com',
+        'https://www.riwaayathreads.com',
+    ]

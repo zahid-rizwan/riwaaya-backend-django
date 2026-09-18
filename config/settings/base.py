@@ -3,10 +3,15 @@ import urllib.parse
 from pathlib import Path
 from datetime import timedelta
 from dotenv import load_dotenv
+from corsheaders.defaults import default_headers
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 load_dotenv(BASE_DIR / '.env')
+
+# Node-compatible cart requests send this custom guest-session header.
+CORS_ALLOW_HEADERS = (*default_headers, 'x-session-id')
+CORS_ALLOW_CREDENTIALS = True
 
 # Application definition
 INSTALLED_APPS = [
