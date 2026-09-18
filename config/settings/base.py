@@ -161,12 +161,14 @@ if USE_S3:
     AWS_S3_ENDPOINT_URL = os.environ.get('AWS_S3_ENDPOINT_URL') or None
     AWS_S3_FILE_OVERWRITE = False
     AWS_DEFAULT_ACL = None
-    AWS_QUERYSTRING_AUTH = False
+    # Keep objects private and give the frontend temporary signed URLs.
+    AWS_QUERYSTRING_AUTH = True
+    AWS_QUERYSTRING_EXPIRE = int(os.environ.get('AWS_QUERYSTRING_EXPIRE', '3600'))
     AWS_S3_SIGNATURE_VERSION = 's3v4'
     AWS_LOCATION = os.environ.get('AWS_LOCATION', 'media')
     MEDIA_URL = os.environ.get(
         'AWS_MEDIA_URL',
-        f'https://{AWS_STORAGE_BUCKET_NAME}.s3.{AWS_S3_REGION_NAME}.amazonaws.com/{AWS_LOCATION}/',
+        f'https://{AWS_STORAGE_BUCKET_NAME}.s3.{AWS_S3_REGION_NAME}.amazonaws.com/',
     )
     STORAGES = {
         'default': {'BACKEND': 'storages.backends.s3.S3Storage'},
