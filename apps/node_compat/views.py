@@ -9,6 +9,7 @@ from django.core.files.storage import default_storage
 from django.core.files.base import ContentFile
 from django.db import transaction
 from django.db.models import Count, Sum
+from django.db.models import Q
 from django.utils.text import slugify
 from rest_framework import permissions, status
 from rest_framework.response import Response
@@ -150,7 +151,11 @@ class ProductListCreateView(APIView):
     def get(self, request):
         qs = Product.objects.select_related('category', 'seller__user').prefetch_related('variants__inventory', 'variants__images').order_by('-created_at')
         tag, search, state = request.query_params.get('tag'), request.query_params.get('search'), request.query_params.get('status')
-        if tag and tag != 'all': qs = qs.filter(category__slug=tag)
+        if tag and tag != 'all':
+            if tag == 'suits':
+                qs = qs.filter(Q(category__slug='suits') | Q(category__isnull=True))
+            else:
+                qs = qs.filter(category__slug=tag)
         if search: qs = qs.filter(name__icontains=search)
         if state and state != 'ALL': qs = qs.filter(is_active=(state == 'APPROVED'))
         return node_response([product_data(request, p) for p in qs], 'Products fetched successfully', count=qs.count())
@@ -159,7 +164,9 @@ class ProductListCreateView(APIView):
         seller = getattr(request.user, 'seller_profile', None) or SellerProfile.objects.first()
         if not seller: return Response({'message': 'Seller profile is required'}, status=400)
         name = request.data.get('name', 'New Atelier Suit')
-        category = Category.objects.filter(slug=request.data.get('tag', 'suits')).first()
+        category_slug = request.data.get('tag', 'suits')
+        category_names = {'suits': 'Pakistani Suits', 'coords': 'Co-Ord Sets', 'party': 'Party Wear', 'hampers': 'Gift Hampers'}
+        category, _ = Category.objects.get_or_create(slug=category_slug, defaults={'name': category_names.get(category_slug, category_slug.title())})
         variants = request.data.get('variants') or [{}]
         with transaction.atomic():
             product = Product.objects.create(seller=seller, category=category, name=name, slug=f'{slugify(name)}-{str(UUID(int=__import__("uuid").uuid4().int))[:8]}', description=request.data.get('description', 'Handcrafted luxury apparel.'), is_active=request.data.get('status', 'APPROVED') != 'HIDDEN')
