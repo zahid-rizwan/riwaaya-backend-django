@@ -92,6 +92,8 @@ class Variant(models.Model):
         related_name='variants'
     )
     sku = models.CharField(max_length=100, unique=True)
+    size = models.CharField(max_length=30, blank=True, default='')
+    color = models.CharField(max_length=80, blank=True, default='')
     price = models.DecimalField(max_digits=10, decimal_places=2)
     discount_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
     is_active = models.BooleanField(default=True)

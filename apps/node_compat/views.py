@@ -49,10 +49,21 @@ def product_data(request, product):
     variants = list(product.variants.select_related('inventory').all())
     first = variants[0] if variants else None
     stock = sum(getattr(getattr(v, 'inventory', None), 'available_stock', 0) for v in variants)
+    variant_data = [
+        {'id': str(v.id), 'sku': v.sku, 'size': v.size, 'color': v.color,
+         'price': float(v.discount_price or v.price), 'originalPrice': float(v.price),
+         'discountPercent': round((float(v.price - v.discount_price) / float(v.price)) * 100) if v.discount_price and v.price else 0,
+         'stock': getattr(getattr(v, 'inventory', None), 'available_stock', 0),
+         'available_stock': getattr(getattr(v, 'inventory', None), 'available_stock', 0)}
+        for v in variants
+    ]
+    colors = []
+    for color in dict.fromkeys(v.color for v in variants if v.color):
+        colors.append({'name': color, 'hex': '#B8963E', 'inStock': any(v.color == color and getattr(getattr(v, 'inventory', None), 'available_stock', 0) > 0 for v in variants)})
     return {'_id': str(product.id), 'id': str(product.id), 'name': product.name,
             'slug': product.slug, 'price': float(first.discount_price or first.price) if first else 0,
             'originalPrice': float(first.price) if first else 0, 'stock': stock,
-            'tag': product.category.slug if product.category else 'suits',
+            'tag': product.category.slug if product.category else 'suits', 'variants': variant_data, 'colors': colors,
             'images': [request.build_absolute_uri(i.image.url) for v in variants for i in v.images.all()],
             'description': product.description, 'status': 'APPROVED' if product.is_active else 'HIDDEN',
             'category': {'id': str(product.category.id), 'name': product.category.name, 'slug': product.category.slug} if product.category else None,
@@ -148,17 +159,21 @@ class ProductListCreateView(APIView):
         name = request.data.get('name', 'New Atelier Suit')
         category = Category.objects.filter(slug=request.data.get('tag', 'suits')).first()
         variants = request.data.get('variants') or [{}]
-        requested_sku = variants[0].get('sku') if isinstance(variants[0], dict) else None
-        sku = requested_sku or f'SKU-{str(UUID(int=__import__("uuid").uuid4().int))[:8]}'
-        if Variant.objects.filter(sku=sku).exists():
-            sku = f'{sku}-{str(UUID(int=__import__("uuid").uuid4().int))[:8]}'
         with transaction.atomic():
             product = Product.objects.create(seller=seller, category=category, name=name, slug=f'{slugify(name)}-{str(UUID(int=__import__("uuid").uuid4().int))[:8]}', description=request.data.get('description', 'Handcrafted luxury apparel.'), is_active=request.data.get('status', 'APPROVED') != 'HIDDEN')
-            variant = Variant.objects.create(product=product, sku=sku, price=Decimal(str(request.data.get('price', 0) or 0)))
-            Inventory.objects.create(variant=variant, available_stock=int(request.data.get('stock', 0) or 0))
+            created_variants = []
+            for variant_input in variants:
+                variant_input = variant_input if isinstance(variant_input, dict) else {}
+                sku = variant_input.get('sku') or f'SKU-{str(UUID(int=__import__("uuid").uuid4().int))[:8]}'
+                if Variant.objects.filter(sku=sku).exists(): sku = f'{sku}-{str(UUID(int=__import__("uuid").uuid4().int))[:8]}'
+                selling_price = Decimal(str(variant_input.get('price', request.data.get('price', 0)) or 0))
+                regular_price = Decimal(str(variant_input.get('originalPrice', request.data.get('originalPrice', selling_price)) or selling_price))
+                variant = Variant.objects.create(product=product, sku=sku, size=variant_input.get('size', ''), color=variant_input.get('color', ''), price=regular_price, discount_price=selling_price if selling_price < regular_price else None)
+                Inventory.objects.create(variant=variant, available_stock=int(variant_input.get('stock', request.data.get('stock', 0)) or 0))
+                created_variants.append(variant)
             for image_key in request.data.get('imageKeys', []):
                 if image_key:
-                    ProductImage.objects.create(variant=variant, image=str(image_key))
+                    ProductImage.objects.create(variant=created_variants[0], image=str(image_key))
         return node_response(product_data(request, product), 'Product created successfully', 201)
 
 
@@ -172,13 +187,23 @@ class ProductDetailView(APIView):
         for field in ('name', 'description'):
             if field in request.data: setattr(product, field, request.data[field])
         if 'status' in request.data: product.is_active = request.data['status'] != 'HIDDEN'
-        product.save(); return node_response(product_data(request, product), 'Product updated successfully')
+        product.save()
+        first_variant = product.variants.first()
+        if first_variant and ('price' in request.data or 'originalPrice' in request.data):
+            selling_price = Decimal(str(request.data.get('price', first_variant.discount_price or first_variant.price)))
+            regular_price = Decimal(str(request.data.get('originalPrice', first_variant.price)))
+            first_variant.price = regular_price
+            first_variant.discount_price = selling_price if selling_price < regular_price else None
+            first_variant.save(update_fields=['price', 'discount_price', 'updated_at'])
+        return node_response(product_data(request, product), 'Product updated successfully')
     def delete(self, request, product_id): Product.objects.filter(id=product_id).delete(); return node_response(None, 'Product deleted successfully')
 
 
 class ProductVariantView(APIView):
     def post(self, request, product_id):
-        product = Product.objects.get(id=product_id); variant = Variant.objects.create(product=product, sku=request.data['sku'], price=request.data['price'])
+        product = Product.objects.get(id=product_id); sku = request.data.get('sku') or f'SKU-{str(UUID(int=__import__("uuid").uuid4().int))[:8]}'
+        if Variant.objects.filter(sku=sku).exists(): sku = f'{sku}-{str(UUID(int=__import__("uuid").uuid4().int))[:8]}'
+        variant = Variant.objects.create(product=product, sku=sku, size=request.data.get('size', ''), color=request.data.get('color', ''), price=request.data['price'], discount_price=request.data.get('discount_price') or None)
         Inventory.objects.create(variant=variant, available_stock=request.data.get('stock', 0)); return node_response({'id': str(variant.id), 'sku': variant.sku}, 'Variant created successfully', 201)
 
 
