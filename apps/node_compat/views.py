@@ -192,6 +192,13 @@ class ProductDetailView(APIView):
         product = Product.objects.get(id=product_id)
         for field in ('name', 'description'):
             if field in request.data: setattr(product, field, request.data[field])
+        category_value = request.data.get('category') or request.data.get('tag')
+        if category_value is not None:
+            category_map = {'1': 'suits', '2': 'coords', '3': 'party', '4': 'hampers'}
+            category_slug = category_map.get(str(category_value), str(category_value).lower())
+            category_names = {'suits': 'Pakistani Suits', 'coords': 'Co-Ord Sets', 'party': 'Party Wear', 'hampers': 'Gift Hampers'}
+            category, _ = Category.objects.get_or_create(slug=category_slug, defaults={'name': category_names.get(category_slug, category_slug.title())})
+            product.category = category
         if 'status' in request.data: product.is_active = request.data['status'] != 'HIDDEN'
         product.save()
         first_variant = product.variants.first()
