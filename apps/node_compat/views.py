@@ -208,6 +208,10 @@ class ProductDetailView(APIView):
             first_variant.price = regular_price
             first_variant.discount_price = selling_price if selling_price < regular_price else None
             first_variant.save(update_fields=['price', 'discount_price', 'updated_at'])
+        if first_variant and 'stock' in request.data:
+            inventory, _ = Inventory.objects.get_or_create(variant=first_variant)
+            inventory.available_stock = max(0, int(request.data.get('stock') or 0))
+            inventory.save(update_fields=['available_stock'])
         return node_response(product_data(request, product), 'Product updated successfully')
     def delete(self, request, product_id): Product.objects.filter(id=product_id).delete(); return node_response(None, 'Product deleted successfully')
 
