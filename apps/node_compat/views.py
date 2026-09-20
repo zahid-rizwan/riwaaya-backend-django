@@ -49,11 +49,13 @@ def product_data(request, product):
     variants = list(product.variants.select_related('inventory').all())
     first = variants[0] if variants else None
     stock = sum(getattr(getattr(v, 'inventory', None), 'available_stock', 0) for v in variants)
+    main_images = [request.build_absolute_uri(i.image.url) for v in variants for i in v.images.all()]
     variant_data = [
         {'id': str(v.id), 'sku': v.sku, 'size': v.size, 'color': v.color,
          'price': float(v.discount_price or v.price), 'originalPrice': float(v.price),
          'discountPercent': round((float(v.price - v.discount_price) / float(v.price)) * 100) if v.discount_price and v.price else 0,
          'stock': getattr(getattr(v, 'inventory', None), 'available_stock', 0),
+         'images': [request.build_absolute_uri(i.image.url) for i in v.images.all()] or main_images[:1],
          'available_stock': getattr(getattr(v, 'inventory', None), 'available_stock', 0)}
         for v in variants
     ]
@@ -64,7 +66,7 @@ def product_data(request, product):
             'slug': product.slug, 'price': float(first.discount_price or first.price) if first else 0,
             'originalPrice': float(first.price) if first else 0, 'stock': stock,
             'tag': product.category.slug if product.category else 'suits', 'variants': variant_data, 'colors': colors,
-            'images': [request.build_absolute_uri(i.image.url) for v in variants for i in v.images.all()],
+            'images': main_images,
             'description': product.description, 'status': 'APPROVED' if product.is_active else 'HIDDEN',
             'category': {'id': str(product.category.id), 'name': product.category.name, 'slug': product.category.slug} if product.category else None,
             'seller': {'id': str(product.seller.id), 'shopName': product.seller.business_name,
@@ -170,9 +172,13 @@ class ProductListCreateView(APIView):
                 regular_price = Decimal(str(variant_input.get('originalPrice', request.data.get('originalPrice', selling_price)) or selling_price))
                 variant = Variant.objects.create(product=product, sku=sku, size=variant_input.get('size', ''), color=variant_input.get('color', ''), price=regular_price, discount_price=selling_price if selling_price < regular_price else None)
                 Inventory.objects.create(variant=variant, available_stock=int(variant_input.get('stock', request.data.get('stock', 0)) or 0))
+                for image_key in variant_input.get('imageKeys', []):
+                    if image_key:
+                        ProductImage.objects.create(variant=variant, image=str(image_key))
                 created_variants.append(variant)
+            has_variant_images = any(isinstance(item, dict) and item.get('imageKeys') for item in variants)
             for image_key in request.data.get('imageKeys', []):
-                if image_key:
+                if image_key and not has_variant_images:
                     ProductImage.objects.create(variant=created_variants[0], image=str(image_key))
         return node_response(product_data(request, product), 'Product created successfully', 201)
 
@@ -204,7 +210,11 @@ class ProductVariantView(APIView):
         product = Product.objects.get(id=product_id); sku = request.data.get('sku') or f'SKU-{str(UUID(int=__import__("uuid").uuid4().int))[:8]}'
         if Variant.objects.filter(sku=sku).exists(): sku = f'{sku}-{str(UUID(int=__import__("uuid").uuid4().int))[:8]}'
         variant = Variant.objects.create(product=product, sku=sku, size=request.data.get('size', ''), color=request.data.get('color', ''), price=request.data['price'], discount_price=request.data.get('discount_price') or None)
-        Inventory.objects.create(variant=variant, available_stock=request.data.get('stock', 0)); return node_response({'id': str(variant.id), 'sku': variant.sku}, 'Variant created successfully', 201)
+        Inventory.objects.create(variant=variant, available_stock=request.data.get('stock', 0))
+        for image_key in request.data.get('imageKeys', []):
+            if image_key:
+                ProductImage.objects.create(variant=variant, image=str(image_key))
+        return node_response({'id': str(variant.id), 'sku': variant.sku, 'size': variant.size, 'color': variant.color}, 'Variant created successfully', 201)
 
 
 class ProductUploadView(APIView):
