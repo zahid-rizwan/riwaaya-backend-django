@@ -325,6 +325,9 @@ def product_data(request, product):
         'groupId': getattr(product, 'group_id', ''),
         'colorName': getattr(product, 'color_name', '') or (first.color if first else ''),
         'colorHex': getattr(product, 'color_hex', '') or '#B8963E',
+        'productType': getattr(product, 'product_type', 'readymade') or 'readymade',
+        'product_type': getattr(product, 'product_type', 'readymade') or 'readymade',
+        'isReadymade': (getattr(product, 'product_type', 'readymade') or 'readymade') == 'readymade',
         'colorVariants': color_variants,
         'variants': variant_data,
         'colors': colors,
@@ -586,6 +589,7 @@ class ProductListCreateView(APIView):
                 group_id=master_group_id,
                 color_name=first_color,
                 color_hex=first_hex,
+                product_type=request.data.get('productType') or request.data.get('product_type') or 'readymade',
                 is_active=request.data.get('status', 'APPROVED') != 'HIDDEN'
             )
             # Synchronize ALL variants (all sizes and colors) onto this single product
@@ -603,6 +607,8 @@ class ProductDetailView(APIView):
         product = Product.objects.get(id=product_id)
         for field in ('name', 'description'):
             if field in request.data: setattr(product, field, request.data[field])
+        if 'productType' in request.data or 'product_type' in request.data:
+            product.product_type = request.data.get('productType') or request.data.get('product_type') or 'readymade'
         category_value = request.data.get('category') or request.data.get('tag')
         if category_value is not None:
             category_map = {'1': 'suits', '2': 'coords', '3': 'party', '4': 'hampers'}
@@ -744,15 +750,35 @@ class CartView(APIView):
         return node_response({'items': items, 'subtotal': float(subtotal), 'shipping': shipping, 'discount': 0, 'grandTotal': float(subtotal + shipping)}, message)
     def get(self, request): return self._response(request, self._cart(request))
     def post(self, request):
-        product_id = str(request.data.get('productId'))
-        size = request.data.get('size', 'M')
-        color = request.data.get('color', 'Ivory')
-        product = Product.objects.get(id=product_id)
-        
-        # Match variant by size/color or pick first
-        variant = product.variants.filter(size__iexact=size, color__iexact=color).first() or product.variants.first()
-        items = self._cart(request)
-        existing = next((i for i in items if i['productId'] == product_id and i['size'] == size and i.get('color') == color), None)
+        raw_product_id = str(request.data.get('productId') or '').strip()
+        clean_product_id = raw_product_id.split('_')[0]
+        size = str(request.data.get('size') or 'M').strip()
+        color = str(request.data.get('color') or '').strip()
+        req_name = str(request.data.get('name') or '').strip()
+        req_image = str(request.data.get('image') or '').strip()
+
+        product = Product.objects.filter(id=clean_product_id).first()
+        if not product:
+            try:
+                product = Product.objects.get(id=clean_product_id)
+            except Exception:
+                product = Product.objects.filter(Q(id=clean_product_id) | Q(slug=clean_product_id)).first()
+
+        if not product:
+            return Response({'message': 'Product not found'}, status=404)
+
+        # Match variant by color/size
+        variant = None
+        if color:
+            variant = product.variants.filter(color__iexact=color, size__iexact=size).first()
+            if not variant:
+                variant = product.variants.filter(color__iexact=color).first()
+            if not variant:
+                variant = product.variants.filter(color__icontains=color).first()
+        if not variant:
+            variant = product.variants.filter(size__iexact=size).first()
+        if not variant:
+            variant = product.variants.first()
 
         def resolve_img(img_val):
             if not img_val:
@@ -777,13 +803,14 @@ class CartView(APIView):
             return request.build_absolute_uri('/media/' + s.lstrip('/'))
 
         image_url = ""
-        if variant:
+        # If frontend passed specific card/variant image, honor it
+        if req_image:
+            image_url = resolve_img(req_image)
+
+        if not image_url and variant:
             v_img = variant.images.first()
             if v_img:
                 image_url = resolve_img(v_img.image)
-
-        if not image_url and request.data.get('image'):
-            image_url = resolve_img(request.data.get('image'))
 
         if not image_url:
             for v in product.variants.all():
@@ -797,15 +824,23 @@ class CartView(APIView):
             image_url = "/assets/1540aab590cd7d478ad01cdb1a615d469ef2a808.png"
 
         item_price = float(variant.discount_price or variant.price) if variant and variant.price else float(request.data.get('price', 0))
+        item_color = color if color else (variant.color if variant and variant.color else getattr(product, 'color_name', '') or 'Standard')
+        item_name = req_name if req_name else product.name
+
+        items = self._cart(request)
+        item_key = f"{clean_product_id}_{slugify(item_color)}_{slugify(size)}"
+        
+        existing = next((i for i in items if (i.get('productId') == raw_product_id or i.get('productId') == clean_product_id) and str(i.get('size', '')).lower() == size.lower() and str(i.get('color', '')).lower() == item_color.lower()), None)
+
         item = {
-            'id': f'cart_{product_id}_{size}_{color}',
-            'productId': product_id,
-            'name': product.name,
+            'id': f'cart_{item_key}',
+            'productId': raw_product_id,
+            'name': item_name,
             'category': product.category.slug if product.category else 'suits',
             'price': item_price,
             'image': image_url,
             'size': size,
-            'color': color,
+            'color': item_color,
             'quantity': int(request.data.get('quantity', 1))
         }
 

@@ -46,6 +46,7 @@ class Product(models.Model):
     group_id = models.CharField(max_length=100, blank=True, null=True, db_index=True)
     color_name = models.CharField(max_length=80, blank=True, default='')
     color_hex = models.CharField(max_length=30, blank=True, default='')
+    product_type = models.CharField(max_length=30, default='readymade') # 'readymade' or 'unstitched'
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
