@@ -2,6 +2,7 @@ from decimal import Decimal
 import hashlib
 import hmac
 import os
+import urllib.parse
 from uuid import UUID
 
 from django.contrib.auth import authenticate, get_user_model
@@ -46,32 +47,298 @@ def node_response(data=None, message='Success', code=200, **extra):
     return Response(body, status=code)
 
 
+def clean_image_path(img_src):
+    if not img_src:
+        return ""
+    s = urllib.parse.unquote(str(img_src)).strip()
+    if not s:
+        return ""
+
+    if '/assets/' in s:
+        asset_rel = s.split('/assets/')[-1]
+        return f"/assets/{asset_rel}"
+    if s.startswith('/assets/'):
+        return s
+
+    if '?' in s:
+        s = s.split('?')[0]
+
+    if '/media/' in s:
+        s = s.split('/media/')[-1]
+
+    if s.startswith('http://') or s.startswith('https://'):
+        if 'product_images/' in s:
+            s = 'product_images/' + s.split('product_images/')[-1]
+        elif 'products/' in s:
+            s = 'products/' + s.split('products/')[-1]
+        else:
+            parts = s.split('/')
+            if len(parts) > 3:
+                s = '/'.join(parts[3:])
+
+    return urllib.parse.unquote(s).lstrip('/')[:450]
+
+
+def sync_product_variants(product, v_list, product_image_fallback=None):
+    if not isinstance(v_list, list):
+        return []
+
+    # Build color image map and color hex map across all input variants
+    color_image_map = {}
+    color_hex_map = {}
+    for v_item in v_list:
+        if not isinstance(v_item, dict):
+            continue
+        v_color = str(v_item.get('color', '') or '').strip()
+        v_color_key = v_color.lower()
+        v_hex = str(v_item.get('colorHex') or v_item.get('color_hex') or '').strip()
+        if v_color_key and v_hex and v_hex != '#B8963E':
+            color_hex_map[v_color_key] = v_hex
+
+        if v_color_key:
+            raw_v_imgs = [
+                clean_image_path(k) for k in v_item.get('imageKeys', []) if k
+            ] + [
+                clean_image_path(u) for u in v_item.get('images', []) if u
+            ]
+            v_imgs = list(dict.fromkeys([img for img in raw_v_imgs if img]))
+            if v_imgs:
+                if v_color_key not in color_image_map:
+                    color_image_map[v_color_key] = []
+                for img in v_imgs:
+                    if img not in color_image_map[v_color_key]:
+                        color_image_map[v_color_key].append(img)
+
+    kept_variant_ids = []
+    created_or_updated = []
+    for v_item in v_list:
+        if not isinstance(v_item, dict):
+            continue
+        sku = (v_item.get('sku') or '').strip()
+        v_id = v_item.get('id')
+        selling_price = Decimal(str(v_item.get('price', 0) or 0))
+        regular_price = Decimal(str(v_item.get('originalPrice', selling_price) or selling_price))
+        v_size = str(v_item.get('size', '') or '').strip()
+        v_color = str(v_item.get('color', '') or '').strip()
+        v_color_key = v_color.lower()
+        
+        v_hex = str(v_item.get('colorHex') or v_item.get('color_hex') or '').strip()
+        if not v_hex or v_hex == '#B8963E':
+            v_hex = color_hex_map.get(v_color_key) or str(product.color_hex or '#B8963E').strip()
+
+        variant = None
+        if v_id:
+            try:
+                variant = Variant.objects.filter(id=v_id, product=product).first()
+            except Exception:
+                variant = None
+        if not variant and sku:
+            variant = Variant.objects.filter(sku=sku, product=product).first()
+        if not variant and (v_size or v_color):
+            variant = Variant.objects.filter(product=product, size__iexact=v_size, color__iexact=v_color).first()
+
+        if not sku:
+            color_code = v_color[:3].upper() if v_color else 'VAR'
+            size_code = v_size.upper() if v_size else 'FREE'
+            sku = f"SKU-{slugify(product.name)[:10].upper()}-{color_code}-{size_code}-{str(UUID(int=__import__('uuid').uuid4().int))[:4]}"
+
+        if variant:
+            variant.size = v_size
+            variant.color = v_color
+            variant.color_hex = v_hex
+            variant.price = regular_price
+            variant.discount_price = selling_price if selling_price < regular_price else None
+            if sku and not Variant.objects.filter(sku=sku).exclude(id=variant.id).exists():
+                variant.sku = sku
+            variant.save()
+        else:
+            if Variant.objects.filter(sku=sku).exists():
+                sku = f"{sku}-{str(UUID(int=__import__('uuid').uuid4().int))[:4]}"
+            variant = Variant.objects.create(
+                product=product,
+                sku=sku,
+                size=v_size,
+                color=v_color,
+                color_hex=v_hex,
+                price=regular_price,
+                discount_price=selling_price if selling_price < regular_price else None
+            )
+
+        kept_variant_ids.append(variant.id)
+        created_or_updated.append(variant)
+
+        stock_qty = int(v_item.get('stock', 0) or 0)
+        inventory, _ = Inventory.objects.get_or_create(variant=variant)
+        inventory.available_stock = max(0, stock_qty)
+        inventory.save()
+
+        raw_var_images = [
+            clean_image_path(k) for k in v_item.get('imageKeys', []) if k
+        ] + [
+            clean_image_path(u) for u in v_item.get('images', []) if u
+        ]
+        var_images = list(dict.fromkeys([img for img in raw_var_images if img]))
+        
+        # Color level image fallback (Myntra-style: size variants inherit color images)
+        if not var_images and v_color_key in color_image_map:
+            var_images = color_image_map[v_color_key]
+
+        if var_images:
+            ProductImage.objects.filter(variant=variant).delete()
+            for img_src in var_images:
+                c = clean_image_path(img_src)
+                if c:
+                    ProductImage.objects.create(variant=variant, image=c)
+        elif product_image_fallback and not variant.images.exists():
+            for img_src in product_image_fallback:
+                c = clean_image_path(img_src)
+                if c:
+                    ProductImage.objects.create(variant=variant, image=c)
+
+    if kept_variant_ids:
+        Variant.objects.filter(product=product).exclude(id__in=kept_variant_ids).delete()
+
+    return created_or_updated
+
+
 def product_data(request, product):
-    variants = list(product.variants.select_related('inventory').all())
+    variants = list(product.variants.select_related('inventory').prefetch_related('images').all())
     first = variants[0] if variants else None
     stock = sum(getattr(getattr(v, 'inventory', None), 'available_stock', 0) for v in variants)
-    main_images = [request.build_absolute_uri(i.image.url) for v in variants for i in v.images.all()]
-    variant_data = [
-        {'id': str(v.id), 'sku': v.sku, 'size': v.size, 'color': v.color,
-         'price': float(v.discount_price or v.price), 'originalPrice': float(v.price),
-         'discountPercent': round((float(v.price - v.discount_price) / float(v.price)) * 100) if v.discount_price and v.price else 0,
-         'stock': getattr(getattr(v, 'inventory', None), 'available_stock', 0),
-         'images': [request.build_absolute_uri(i.image.url) for i in v.images.all()] or main_images[:1],
-         'available_stock': getattr(getattr(v, 'inventory', None), 'available_stock', 0)}
-        for v in variants
-    ]
+    
+    def format_img_url(img_obj):
+        if not img_obj:
+            return ""
+        img_str = str(img_obj).strip()
+        if not img_str:
+            return ""
+        if img_str.startswith('/assets/') or img_str.startswith('assets/'):
+            if not img_str.startswith('/'):
+                return '/' + img_str
+            return img_str
+        
+        clean_key = clean_image_path(img_str)
+        if not clean_key:
+            return ""
+
+        try:
+            url = default_storage.url(clean_key)
+            if url.startswith('http://') or url.startswith('https://'):
+                return url
+            return request.build_absolute_uri(url)
+        except Exception:
+            pass
+
+        if '/media/' in clean_key:
+            clean_rel = clean_key.split('/media/')[-1]
+            return request.build_absolute_uri('/media/' + clean_rel)
+        clean_rel = clean_key.lstrip('/')
+        return request.build_absolute_uri('/media/' + clean_rel)
+
+    main_images = []
+    for v in variants:
+        for i in v.images.all():
+            formatted = format_img_url(i.image)
+            if formatted and formatted not in main_images:
+                main_images.append(formatted)
+
+    if not main_images:
+        main_images = ["/assets/1540aab590cd7d478ad01cdb1a615d469ef2a808.png"]
+
+    variant_data = []
+    for v in variants:
+        v_images = [format_img_url(i.image) for i in v.images.all() if format_img_url(i.image)]
+        if not v_images:
+            v_images = main_images
+        v_price = float(v.discount_price or v.price) if v.price else 0.0
+        v_orig = float(v.price) if v.price else 0.0
+        v_disc_pct = round(((v_orig - v_price) / v_orig) * 100) if v_orig > v_price and v_orig > 0 else 0
+        v_stock = getattr(getattr(v, 'inventory', None), 'available_stock', 0)
+        variant_data.append({
+            'id': str(v.id),
+            'sku': v.sku,
+            'size': v.size,
+            'color': v.color,
+            'colorHex': getattr(v, 'color_hex', '') or product.color_hex or '#B8963E',
+            'price': v_price,
+            'originalPrice': v_orig,
+            'discountPercent': v_disc_pct,
+            'stock': v_stock,
+            'images': v_images,
+            'image': v_images[0] if v_images else main_images[0],
+            'available_stock': v_stock
+        })
+
     colors = []
-    for color in dict.fromkeys(v.color for v in variants if v.color):
-        colors.append({'name': color, 'hex': '#B8963E', 'inStock': any(v.color == color and getattr(getattr(v, 'inventory', None), 'available_stock', 0) > 0 for v in variants)})
-    return {'_id': str(product.id), 'id': str(product.id), 'name': product.name,
-            'slug': product.slug, 'price': float(first.discount_price or first.price) if first else 0,
-            'originalPrice': float(first.price) if first else 0, 'stock': stock,
-            'tag': product.category.slug if product.category else 'suits', 'variants': variant_data, 'colors': colors,
-            'images': main_images,
-            'description': product.description, 'status': 'APPROVED' if product.is_active else 'HIDDEN',
-            'category': {'id': str(product.category.id), 'name': product.category.name, 'slug': product.category.slug} if product.category else None,
-            'seller': {'id': str(product.seller.id), 'shopName': product.seller.business_name,
-                       'name': product.seller.user.get_full_name() or product.seller.user.username}}
+    seen_colors = {}
+    for v in variants:
+        if v.color:
+            v_hex = getattr(v, 'color_hex', '') or product.color_hex or '#B8963E'
+            v_stock = getattr(getattr(v, 'inventory', None), 'available_stock', 0)
+            if v.color not in seen_colors:
+                seen_colors[v.color] = {
+                    'name': v.color,
+                    'hex': v_hex,
+                    'colorHex': v_hex,
+                    'inStock': v_stock > 0
+                }
+            else:
+                if v_hex and v_hex != '#B8963E':
+                    seen_colors[v.color]['hex'] = v_hex
+                    seen_colors[v.color]['colorHex'] = v_hex
+                if v_stock > 0:
+                    seen_colors[v.color]['inStock'] = True
+
+    colors = list(seen_colors.values())
+
+    first_price = float(first.discount_price or first.price) if first and first.price else 0.0
+    first_orig = float(first.price) if first and first.price else 0.0
+
+    color_variants = []
+    if getattr(product, 'group_id', None):
+        siblings = Product.objects.filter(group_id=product.group_id, is_active=True).exclude(id=product.id).prefetch_related('variants__images')
+        for sib in siblings:
+            sib_vars = list(sib.variants.all())
+            sib_first = sib_vars[0] if sib_vars else None
+            sib_img = main_images[0]
+            if sib_first and sib_first.images.first():
+                sib_img = format_img_url(sib_first.images.first().image)
+            color_variants.append({
+                'id': str(sib.id),
+                'name': sib.name,
+                'slug': sib.slug,
+                'color': sib.color_name or (sib_first.color if sib_first else ''),
+                'colorHex': sib.color_hex or '#B8963E',
+                'price': float(sib_first.discount_price or sib_first.price) if sib_first and sib_first.price else 0.0,
+                'image': sib_img
+            })
+
+    return {
+        '_id': str(product.id),
+        'id': str(product.id),
+        'name': product.name,
+        'slug': product.slug,
+        'price': first_price,
+        'originalPrice': first_orig,
+        'stock': stock,
+        'tag': product.category.slug if product.category else 'suits',
+        'groupId': getattr(product, 'group_id', ''),
+        'colorName': getattr(product, 'color_name', '') or (first.color if first else ''),
+        'colorHex': getattr(product, 'color_hex', '') or '#B8963E',
+        'colorVariants': color_variants,
+        'variants': variant_data,
+        'colors': colors,
+        'image': main_images[0],
+        'images': main_images,
+        'description': product.description,
+        'status': 'APPROVED' if product.is_active else 'HIDDEN',
+        'category': {'id': str(product.category.id), 'name': product.category.name, 'slug': product.category.slug} if product.category else None,
+        'seller': {
+            'id': str(product.seller.id),
+            'shopName': product.seller.business_name,
+            'name': product.seller.user.get_full_name() or product.seller.user.username
+        }
+    }
 
 
 class AuthRegisterView(APIView):
@@ -146,48 +413,185 @@ class AuthVerifyOtpView(APIView):
         return Response({'token': token_for(user), 'user': user_data(user)})
 
 
+def filter_and_paginate_products(request, qs):
+    qs = qs.select_related('category', 'seller__user').prefetch_related('variants__inventory', 'variants__images')
+    search = request.query_params.get('search') or request.query_params.get('query')
+    tag = request.query_params.get('tag') or request.query_params.get('category')
+    stock_status = request.query_params.get('stock') or request.query_params.get('stockStatus')
+    status_param = request.query_params.get('status') or request.query_params.get('is_active')
+    sort_by = request.query_params.get('sort') or request.query_params.get('sortBy') or 'newest'
+    
+    try:
+        page = max(1, int(request.query_params.get('page', 1)))
+    except (ValueError, TypeError):
+        page = 1
+        
+    try:
+        page_size = max(1, min(100, int(request.query_params.get('pageSize', request.query_params.get('limit', 10)))))
+    except (ValueError, TypeError):
+        page_size = 10
+
+    if search:
+        qs = qs.filter(
+            Q(name__icontains=search) | 
+            Q(description__icontains=search) | 
+            Q(slug__icontains=search) | 
+            Q(variants__sku__icontains=search)
+        ).distinct()
+
+    if tag and tag != 'all':
+        if tag == 'suits':
+            qs = qs.filter(Q(category__slug='suits') | Q(category__isnull=True))
+        else:
+            qs = qs.filter(Q(category__slug=tag) | Q(category__name__icontains=tag))
+
+    if status_param and status_param != 'all':
+        if status_param.lower() in ('active', 'approved', 'true'):
+            qs = qs.filter(is_active=True)
+        elif status_param.lower() in ('hidden', 'rejected', 'false', 'draft'):
+            qs = qs.filter(is_active=False)
+
+    if stock_status and stock_status != 'all':
+        if stock_status == 'out_of_stock':
+            qs = qs.filter(Q(variants__inventory__available_stock__lte=0) | Q(variants__inventory__isnull=True)).distinct()
+        elif stock_status == 'low_stock':
+            qs = qs.filter(variants__inventory__available_stock__gt=0, variants__inventory__available_stock__lte=5).distinct()
+        elif stock_status == 'in_stock':
+            qs = qs.filter(variants__inventory__available_stock__gt=0).distinct()
+
+    if sort_by == 'price_asc':
+        qs = qs.order_by('variants__price')
+    elif sort_by == 'price_desc':
+        qs = qs.order_by('-variants__price')
+    elif sort_by == 'stock_asc':
+        qs = qs.order_by('variants__inventory__available_stock')
+    elif sort_by == 'stock_desc':
+        qs = qs.order_by('-variants__inventory__available_stock')
+    elif sort_by == 'name_asc':
+        qs = qs.order_by('name')
+    else:
+        qs = qs.order_by('-created_at')
+
+    total_count = qs.count()
+    total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 1
+    start = (page - 1) * page_size
+    end = start + page_size
+    paginated_qs = list(qs[start:end])
+
+    # Deduplicate by group_id so styles aren't duplicated across sub-products
+    seen_group_ids = set()
+    deduped_qs = []
+    for p in paginated_qs:
+        g_id = getattr(p, 'group_id', None)
+        if g_id:
+            if g_id in seen_group_ids:
+                continue
+            seen_group_ids.add(g_id)
+        deduped_qs.append(p)
+
+    data = []
+    for p in deduped_qs:
+        p_info = product_data(request, p)
+        colors_list = p_info.get('colors') or []
+        if len(colors_list) > 1:
+            for col in colors_list:
+                col_name = col['name']
+                col_hex = col.get('colorHex') or col.get('hex') or '#B8963E'
+                col_vars = [v for v in p_info.get('variants', []) if (v.get('color') or '').strip().lower() == col_name.strip().lower()]
+                
+                col_imgs = []
+                for v in col_vars:
+                    for img in v.get('images', []):
+                        if img and img not in col_imgs:
+                            col_imgs.append(img)
+                if not col_imgs:
+                    col_imgs = p_info.get('images', [])
+
+                c_item = dict(p_info)
+                c_item['cardId'] = f"{p_info['id']}_{slugify(col_name)}"
+                c_item['colorName'] = col_name
+                c_item['colorHex'] = col_hex
+                c_item['image'] = col_imgs[0] if col_imgs else p_info['image']
+                c_item['images'] = col_imgs if col_imgs else p_info['images']
+                if col_vars:
+                    v_p = col_vars[0].get('price', p_info['price'])
+                    v_op = col_vars[0].get('originalPrice', p_info['originalPrice'])
+                    c_item['price'] = v_p
+                    c_item['originalPrice'] = v_op
+                    c_item['stock'] = sum(v.get('stock', 0) for v in col_vars)
+                data.append(c_item)
+        else:
+            data.append(p_info)
+
+    return {
+        'data': data,
+        'pagination': {
+            'total': len(data),
+            'page': page,
+            'totalPages': total_pages,
+            'pageSize': page_size,
+            'hasNext': page < total_pages,
+            'hasPrev': page > 1
+        }
+    }
+
+
 class ProductListCreateView(APIView):
     def get_permissions(self): return [permissions.AllowAny()] if self.request.method == 'GET' else [permissions.IsAuthenticated()]
     def get(self, request):
-        qs = Product.objects.select_related('category', 'seller__user').prefetch_related('variants__inventory', 'variants__images').order_by('-created_at')
-        tag, search, state = request.query_params.get('tag'), request.query_params.get('search'), request.query_params.get('status')
-        if tag and tag != 'all':
-            if tag == 'suits':
-                qs = qs.filter(Q(category__slug='suits') | Q(category__isnull=True))
-            else:
-                qs = qs.filter(category__slug=tag)
-        if search: qs = qs.filter(name__icontains=search)
-        if state and state != 'ALL': qs = qs.filter(is_active=(state == 'APPROVED'))
-        return node_response([product_data(request, p) for p in qs], 'Products fetched successfully', count=qs.count())
+        seller = getattr(request.user, 'seller_profile', None) if request.user.is_authenticated else None
+        if seller and request.user.role == UserRole.SELLER:
+            qs = Product.objects.filter(seller=seller)
+        else:
+            qs = Product.objects.all()
+        result = filter_and_paginate_products(request, qs)
+        return node_response(
+            result['data'], 
+            'Products fetched successfully', 
+            count=result['pagination']['total'], 
+            pagination=result['pagination']
+        )
     def post(self, request):
-        if request.user.role not in (UserRole.SELLER, UserRole.ADMIN, UserRole.SUPER_ADMIN): return Response({'message': 'Forbidden'}, status=403)
+        if request.user.role not in (UserRole.SELLER, UserRole.ADMIN, UserRole.SUPER_ADMIN):
+            return Response({'message': 'Forbidden'}, status=403)
         seller = getattr(request.user, 'seller_profile', None) or SellerProfile.objects.first()
-        if not seller: return Response({'message': 'Seller profile is required'}, status=400)
+        if not seller:
+            return Response({'message': 'Seller profile is required'}, status=400)
         name = request.data.get('name', 'New Atelier Suit')
         category_slug = request.data.get('tag', 'suits')
         category_names = {'suits': 'Pakistani Suits', 'coords': 'Co-Ord Sets', 'party': 'Party Wear', 'hampers': 'Gift Hampers'}
         category, _ = Category.objects.get_or_create(slug=category_slug, defaults={'name': category_names.get(category_slug, category_slug.title())})
         variants = request.data.get('variants') or [{}]
+        
+        product_image_sources = list(dict.fromkeys(
+            [str(k) for k in request.data.get('imageKeys', []) if k] +
+            [str(u) for u in request.data.get('images', []) if u]
+        ))
+
+        master_group_id = f"STYLE-{slugify(name)[:15].upper()}-{str(UUID(int=__import__('uuid').uuid4().int))[:6]}"
+        first_hex = '#B8963E'
+        first_color = ''
+        if isinstance(variants, list) and len(variants) > 0 and isinstance(variants[0], dict):
+            first_hex = variants[0].get('colorHex', '#B8963E')
+            first_color = variants[0].get('color', '')
+
         with transaction.atomic():
-            product = Product.objects.create(seller=seller, category=category, name=name, slug=f'{slugify(name)}-{str(UUID(int=__import__("uuid").uuid4().int))[:8]}', description=request.data.get('description', 'Handcrafted luxury apparel.'), is_active=request.data.get('status', 'APPROVED') != 'HIDDEN')
-            created_variants = []
-            for variant_input in variants:
-                variant_input = variant_input if isinstance(variant_input, dict) else {}
-                sku = variant_input.get('sku') or f'SKU-{str(UUID(int=__import__("uuid").uuid4().int))[:8]}'
-                if Variant.objects.filter(sku=sku).exists(): sku = f'{sku}-{str(UUID(int=__import__("uuid").uuid4().int))[:8]}'
-                selling_price = Decimal(str(variant_input.get('price', request.data.get('price', 0)) or 0))
-                regular_price = Decimal(str(variant_input.get('originalPrice', request.data.get('originalPrice', selling_price)) or selling_price))
-                variant = Variant.objects.create(product=product, sku=sku, size=variant_input.get('size', ''), color=variant_input.get('color', ''), price=regular_price, discount_price=selling_price if selling_price < regular_price else None)
-                Inventory.objects.create(variant=variant, available_stock=int(variant_input.get('stock', request.data.get('stock', 0)) or 0))
-                for image_key in variant_input.get('imageKeys', []):
-                    if image_key:
-                        ProductImage.objects.create(variant=variant, image=str(image_key))
-                created_variants.append(variant)
-            has_variant_images = any(isinstance(item, dict) and item.get('imageKeys') for item in variants)
-            for image_key in request.data.get('imageKeys', []):
-                if image_key and not has_variant_images:
-                    ProductImage.objects.create(variant=created_variants[0], image=str(image_key))
-        return node_response(product_data(request, product), 'Product created successfully', 201)
+            # 1. Create single master product
+            main_product = Product.objects.create(
+                seller=seller,
+                category=category,
+                name=name,
+                slug=f"{slugify(name)}-{str(UUID(int=__import__('uuid').uuid4().int))[:8]}",
+                description=request.data.get('description', 'Handcrafted luxury apparel.'),
+                group_id=master_group_id,
+                color_name=first_color,
+                color_hex=first_hex,
+                is_active=request.data.get('status', 'APPROVED') != 'HIDDEN'
+            )
+            # Synchronize ALL variants (all sizes and colors) onto this single product
+            sync_product_variants(main_product, variants, product_image_sources)
+
+        return node_response(product_data(request, main_product), 'Product created successfully with all variants', 201)
 
 
 class ProductDetailView(APIView):
@@ -207,28 +611,91 @@ class ProductDetailView(APIView):
             category, _ = Category.objects.get_or_create(slug=category_slug, defaults={'name': category_names.get(category_slug, category_slug.title())})
             product.category = category
         if 'status' in request.data: product.is_active = request.data['status'] != 'HIDDEN'
+
+        if not product.group_id:
+            product.group_id = f"STYLE-{slugify(product.name)[:15].upper()}-{str(UUID(int=__import__('uuid').uuid4().int))[:6]}"
         product.save()
-        first_variant = product.variants.first()
-        if first_variant and ('price' in request.data or 'originalPrice' in request.data):
-            selling_price = Decimal(str(request.data.get('price', first_variant.discount_price or first_variant.price)))
-            regular_price = Decimal(str(request.data.get('originalPrice', first_variant.price)))
-            first_variant.price = regular_price
-            first_variant.discount_price = selling_price if selling_price < regular_price else None
-            first_variant.save(update_fields=['price', 'discount_price', 'updated_at'])
-        if first_variant and 'stock' in request.data:
-            inventory, _ = Inventory.objects.get_or_create(variant=first_variant)
-            inventory.available_stock = max(0, int(request.data.get('stock') or 0))
-            inventory.save(update_fields=['available_stock'])
+
+        variants_input = request.data.get('variants')
+        product_image_sources = list(dict.fromkeys(
+            [str(k) for k in request.data.get('imageKeys', []) if k] +
+            [str(u) for u in request.data.get('images', []) if u]
+        ))
+
+        with transaction.atomic():
+            if isinstance(variants_input, list) and len(variants_input) > 0:
+                sync_product_variants(product, variants_input, product_image_sources)
+                if isinstance(variants_input[0], dict) and variants_input[0].get('color'):
+                    product.color_name = variants_input[0].get('color')
+                if isinstance(variants_input[0], dict) and variants_input[0].get('colorHex'):
+                    product.color_hex = variants_input[0].get('colorHex')
+                product.save(update_fields=['color_name', 'color_hex'])
+            else:
+                first_variant = product.variants.first()
+                if first_variant and ('price' in request.data or 'originalPrice' in request.data):
+                    selling_price = Decimal(str(request.data.get('price', first_variant.discount_price or first_variant.price)))
+                    regular_price = Decimal(str(request.data.get('originalPrice', first_variant.price)))
+                    first_variant.price = regular_price
+                    first_variant.discount_price = selling_price if selling_price < regular_price else None
+                    first_variant.save(update_fields=['price', 'discount_price', 'updated_at'])
+                if first_variant and 'stock' in request.data:
+                    inventory, _ = Inventory.objects.get_or_create(variant=first_variant)
+                    inventory.available_stock = max(0, int(request.data.get('stock') or 0))
+                    inventory.save(update_fields=['available_stock'])
+
+            # Remove any duplicate sub-products from earlier runs
+            if product.group_id:
+                Product.objects.filter(group_id=product.group_id).exclude(id=product.id).delete()
+
         return node_response(product_data(request, product), 'Product updated successfully')
     def delete(self, request, product_id): Product.objects.filter(id=product_id).delete(); return node_response(None, 'Product deleted successfully')
 
 
 class ProductVariantView(APIView):
     def post(self, request, product_id):
-        product = Product.objects.get(id=product_id); sku = request.data.get('sku') or f'SKU-{str(UUID(int=__import__("uuid").uuid4().int))[:8]}'
-        if Variant.objects.filter(sku=sku).exists(): sku = f'{sku}-{str(UUID(int=__import__("uuid").uuid4().int))[:8]}'
-        variant = Variant.objects.create(product=product, sku=sku, size=request.data.get('size', ''), color=request.data.get('color', ''), price=request.data['price'], discount_price=request.data.get('discount_price') or None)
-        Inventory.objects.create(variant=variant, available_stock=request.data.get('stock', 0))
+        product = Product.objects.get(id=product_id)
+        variants_input = request.data.get('variants')
+        
+        if isinstance(variants_input, list) and len(variants_input) > 0:
+            created_list = []
+            with transaction.atomic():
+                for v_item in variants_input:
+                    if not isinstance(v_item, dict):
+                        continue
+                    sku = v_item.get('sku') or f'SKU-{str(UUID(int=__import__("uuid").uuid4().int))[:8]}'
+                    if Variant.objects.filter(sku=sku).exists():
+                        sku = f'{sku}-{str(UUID(int=__import__("uuid").uuid4().int))[:8]}'
+                    selling_price = Decimal(str(v_item.get('price', 0)))
+                    regular_price = Decimal(str(v_item.get('originalPrice', selling_price) or selling_price))
+                    variant = Variant.objects.create(
+                        product=product,
+                        sku=sku,
+                        size=v_item.get('size', ''),
+                        color=v_item.get('color', ''),
+                        price=regular_price,
+                        discount_price=selling_price if selling_price < regular_price else None
+                    )
+                    Inventory.objects.create(variant=variant, available_stock=int(v_item.get('stock', 0)))
+                    for image_key in (v_item.get('imageKeys') or []):
+                        if image_key:
+                            ProductImage.objects.create(variant=variant, image=str(image_key))
+                    created_list.append({'id': str(variant.id), 'sku': variant.sku, 'size': variant.size, 'color': variant.color})
+            return node_response({'createdCount': len(created_list), 'variants': created_list}, 'Variants created successfully', 201)
+
+        sku = request.data.get('sku') or f'SKU-{str(UUID(int=__import__("uuid").uuid4().int))[:8]}'
+        if Variant.objects.filter(sku=sku).exists():
+            sku = f'{sku}-{str(UUID(int=__import__("uuid").uuid4().int))[:8]}'
+        price = Decimal(str(request.data.get('price', 0)))
+        original_price = Decimal(str(request.data.get('originalPrice', price) or price))
+        variant = Variant.objects.create(
+            product=product,
+            sku=sku,
+            size=request.data.get('size', ''),
+            color=request.data.get('color', ''),
+            price=original_price,
+            discount_price=price if price < original_price else None
+        )
+        Inventory.objects.create(variant=variant, available_stock=int(request.data.get('stock', 0)))
         for image_key in request.data.get('imageKeys', []):
             if image_key:
                 ProductImage.objects.create(variant=variant, image=str(image_key))
@@ -244,7 +711,10 @@ class ProductUploadView(APIView):
         for uploaded_file in files:
             key = default_storage.save(f'product_images/{UUID(int=__import__("uuid").uuid4().int)}-{uploaded_file.name}', ContentFile(uploaded_file.read()))
             keys.append(key)
-            urls.append(default_storage.url(key))
+            url = default_storage.url(key)
+            if not (url.startswith('http://') or url.startswith('https://')):
+                url = request.build_absolute_uri(url)
+            urls.append(url)
         return node_response({'urls': urls, 'keys': keys}, 'Images uploaded successfully')
 
 
@@ -274,12 +744,77 @@ class CartView(APIView):
         return node_response({'items': items, 'subtotal': float(subtotal), 'shipping': shipping, 'discount': 0, 'grandTotal': float(subtotal + shipping)}, message)
     def get(self, request): return self._response(request, self._cart(request))
     def post(self, request):
-        product_id, size = str(request.data.get('productId')), request.data.get('size', 'M'); product = Product.objects.get(id=product_id); variant = product.variants.first(); items = self._cart(request); existing = next((i for i in items if i['productId'] == product_id and i['size'] == size), None)
-        stored_image = variant.images.first() if variant else None
-        image_url = request.build_absolute_uri(stored_image.image.url) if stored_image else request.data.get('image', '')
-        item = {'id': f'cart_{product_id}_{size}', 'productId': product_id, 'name': product.name, 'category': product.category.slug if product.category else 'suits', 'price': float(variant.discount_price or variant.price) if variant else 0, 'image': image_url, 'size': size, 'color': request.data.get('color', 'Ivory'), 'quantity': int(request.data.get('quantity', 1))}
-        if existing: existing['quantity'] += item['quantity']
-        else: items.append(item)
+        product_id = str(request.data.get('productId'))
+        size = request.data.get('size', 'M')
+        color = request.data.get('color', 'Ivory')
+        product = Product.objects.get(id=product_id)
+        
+        # Match variant by size/color or pick first
+        variant = product.variants.filter(size__iexact=size, color__iexact=color).first() or product.variants.first()
+        items = self._cart(request)
+        existing = next((i for i in items if i['productId'] == product_id and i['size'] == size and i.get('color') == color), None)
+
+        def resolve_img(img_val):
+            if not img_val:
+                return ""
+            s = str(img_val).strip()
+            if not s:
+                return ""
+            if s.startswith('http://') or s.startswith('https://'):
+                return s
+            if s.startswith('/assets/'):
+                return s
+            try:
+                url = default_storage.url(s)
+                if url.startswith('http://') or url.startswith('https://'):
+                    return url
+                return request.build_absolute_uri(url)
+            except Exception:
+                pass
+            if '/media/' in s:
+                clean_rel = s.split('/media/')[-1]
+                return request.build_absolute_uri('/media/' + clean_rel)
+            return request.build_absolute_uri('/media/' + s.lstrip('/'))
+
+        image_url = ""
+        if variant:
+            v_img = variant.images.first()
+            if v_img:
+                image_url = resolve_img(v_img.image)
+
+        if not image_url and request.data.get('image'):
+            image_url = resolve_img(request.data.get('image'))
+
+        if not image_url:
+            for v in product.variants.all():
+                v_img = v.images.first()
+                if v_img:
+                    image_url = resolve_img(v_img.image)
+                    if image_url:
+                        break
+
+        if not image_url:
+            image_url = "/assets/1540aab590cd7d478ad01cdb1a615d469ef2a808.png"
+
+        item_price = float(variant.discount_price or variant.price) if variant and variant.price else float(request.data.get('price', 0))
+        item = {
+            'id': f'cart_{product_id}_{size}_{color}',
+            'productId': product_id,
+            'name': product.name,
+            'category': product.category.slug if product.category else 'suits',
+            'price': item_price,
+            'image': image_url,
+            'size': size,
+            'color': color,
+            'quantity': int(request.data.get('quantity', 1))
+        }
+
+        if existing:
+            existing['quantity'] += item['quantity']
+            existing['image'] = image_url
+        else:
+            items.append(item)
+
         return self._response(request, items, 'Item added to bag')
     def delete(self, request): return self._response(request, [], 'Cart cleared')
 
@@ -370,7 +905,16 @@ class SellerStatsView(APIView):
 
 
 class SellerProductsView(APIView):
-    def get(self, request): return Response([product_data(request, p) for p in Product.objects.filter(seller__user=request.user)])
+    def get(self, request):
+        seller = getattr(request.user, 'seller_profile', None) or SellerProfile.objects.first()
+        qs = Product.objects.filter(seller=seller) if seller else Product.objects.all()
+        result = filter_and_paginate_products(request, qs)
+        return node_response(
+            result['data'],
+            'Seller products fetched successfully',
+            count=result['pagination']['total'],
+            pagination=result['pagination']
+        )
 
 
 class SellerProductDetailView(ProductDetailView):

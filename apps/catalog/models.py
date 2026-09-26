@@ -43,6 +43,9 @@ class Product(models.Model):
     name = models.CharField(max_length=255)
     slug = models.SlugField(max_length=255, unique=True)
     description = models.TextField()
+    group_id = models.CharField(max_length=100, blank=True, null=True, db_index=True)
+    color_name = models.CharField(max_length=80, blank=True, default='')
+    color_hex = models.CharField(max_length=30, blank=True, default='')
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -94,6 +97,7 @@ class Variant(models.Model):
     sku = models.CharField(max_length=100, unique=True)
     size = models.CharField(max_length=30, blank=True, default='')
     color = models.CharField(max_length=80, blank=True, default='')
+    color_hex = models.CharField(max_length=30, blank=True, default='#B8963E')
     price = models.DecimalField(max_digits=10, decimal_places=2)
     discount_price = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
     is_active = models.BooleanField(default=True)
@@ -132,7 +136,7 @@ class ProductImage(models.Model):
         on_delete=models.CASCADE, 
         related_name='images'
     )
-    image = models.ImageField(upload_to='product_images/')
+    image = models.ImageField(upload_to='product_images/', max_length=500)
     is_featured = models.BooleanField(default=False)
     alt_text = models.CharField(max_length=255, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
