@@ -201,6 +201,82 @@ def sync_product_variants(product, v_list, product_image_fallback=None):
     return created_or_updated
 
 
+def sync_product_group_colors(main_product, variants_input, product_image_sources=None):
+    if not isinstance(variants_input, list) or len(variants_input) == 0:
+        return [main_product]
+
+    if not main_product.group_id:
+        main_product.group_id = f"STYLE-{slugify(main_product.name)[:15].upper()}-{str(UUID(int=__import__('uuid').uuid4().int))[:6]}"
+        main_product.save(update_fields=['group_id'])
+
+    color_groups = {}
+    for v_item in variants_input:
+        if not isinstance(v_item, dict):
+            continue
+        c_name = str(v_item.get('color') or '').strip()
+        c_key = c_name.lower() or 'default'
+        if c_key not in color_groups:
+            color_groups[c_key] = {
+                'color_name': c_name,
+                'color_hex': str(v_item.get('colorHex') or v_item.get('color_hex') or '#B8963E').strip(),
+                'variants': []
+            }
+        color_groups[c_key]['variants'].append(v_item)
+
+    color_keys = list(color_groups.keys())
+    if not color_keys:
+        sync_product_variants(main_product, variants_input, product_image_sources)
+        return [main_product]
+
+    primary_key = color_keys[0]
+    primary_group = color_groups[primary_key]
+    main_product.color_name = primary_group['color_name']
+    main_product.color_hex = primary_group['color_hex']
+    main_product.save(update_fields=['color_name', 'color_hex'])
+    sync_product_variants(main_product, primary_group['variants'], product_image_sources)
+
+    existing_siblings = list(Product.objects.filter(group_id=main_product.group_id).exclude(id=main_product.id))
+    sibling_map = { (p.color_name or '').strip().lower(): p for p in existing_siblings }
+
+    all_products = [main_product]
+
+    for c_key in color_keys[1:]:
+        c_data = color_groups[c_key]
+        c_name = c_data['color_name']
+        c_hex = c_data['color_hex']
+        
+        sib_product = sibling_map.get(c_key)
+        if not sib_product:
+            sib_product = Product.objects.create(
+                seller=main_product.seller,
+                category=main_product.category,
+                name=main_product.name,
+                slug=f"{slugify(main_product.name)}-{slugify(c_name)}-{str(UUID(int=__import__('uuid').uuid4().int))[:6]}",
+                description=main_product.description,
+                group_id=main_product.group_id,
+                color_name=c_name,
+                color_hex=c_hex,
+                product_type=main_product.product_type,
+                is_active=main_product.is_active
+            )
+        else:
+            sib_product.name = main_product.name
+            sib_product.description = main_product.description
+            sib_product.category = main_product.category
+            sib_product.color_name = c_name
+            sib_product.color_hex = c_hex
+            sib_product.product_type = main_product.product_type
+            sib_product.is_active = main_product.is_active
+            sib_product.save()
+
+        sync_product_variants(sib_product, c_data['variants'], product_image_sources)
+        all_products.append(sib_product)
+
+    Product.objects.filter(group_id=main_product.group_id).exclude(id__in=[p.id for p in all_products]).delete()
+    return all_products
+
+
+
 def product_data(request, product):
     variants = list(product.variants.select_related('inventory').prefetch_related('images').all())
     first = variants[0] if variants else None
@@ -592,8 +668,8 @@ class ProductListCreateView(APIView):
                 product_type=request.data.get('productType') or request.data.get('product_type') or 'readymade',
                 is_active=request.data.get('status', 'APPROVED') != 'HIDDEN'
             )
-            # Synchronize ALL variants (all sizes and colors) onto this single product
-            sync_product_variants(main_product, variants, product_image_sources)
+            # Synchronize color variants into individual Product records sharing group_id
+            sync_product_group_colors(main_product, variants, product_image_sources)
 
         return node_response(product_data(request, main_product), 'Product created successfully with all variants', 201)
 
@@ -630,12 +706,7 @@ class ProductDetailView(APIView):
 
         with transaction.atomic():
             if isinstance(variants_input, list) and len(variants_input) > 0:
-                sync_product_variants(product, variants_input, product_image_sources)
-                if isinstance(variants_input[0], dict) and variants_input[0].get('color'):
-                    product.color_name = variants_input[0].get('color')
-                if isinstance(variants_input[0], dict) and variants_input[0].get('colorHex'):
-                    product.color_hex = variants_input[0].get('colorHex')
-                product.save(update_fields=['color_name', 'color_hex'])
+                sync_product_group_colors(product, variants_input, product_image_sources)
             else:
                 first_variant = product.variants.first()
                 if first_variant and ('price' in request.data or 'originalPrice' in request.data):
