@@ -827,6 +827,8 @@ class CartView(APIView):
         color = str(request.data.get('color') or '').strip()
         req_name = str(request.data.get('name') or '').strip()
         req_image = str(request.data.get('image') or '').strip()
+        variant_id = request.data.get('variantId') or request.data.get('variant_id') or request.data.get('skuId')
+        sku_code = request.data.get('sku')
 
         product = Product.objects.filter(id=clean_product_id).first()
         if not product:
@@ -838,9 +840,16 @@ class CartView(APIView):
         if not product:
             return Response({'message': 'Product not found'}, status=404)
 
-        # Match variant by color/size
+        # Match variant by variant_id / sku / color / size
         variant = None
-        if color:
+        if variant_id:
+            try:
+                variant = product.variants.filter(id=variant_id).first()
+            except Exception:
+                variant = None
+        if not variant and sku_code:
+            variant = product.variants.filter(sku=sku_code).first()
+        if not variant and color:
             variant = product.variants.filter(color__iexact=color, size__iexact=size).first()
             if not variant:
                 variant = product.variants.filter(color__iexact=color).first()
@@ -874,7 +883,6 @@ class CartView(APIView):
             return request.build_absolute_uri('/media/' + s.lstrip('/'))
 
         image_url = ""
-        # If frontend passed specific card/variant image, honor it
         if req_image:
             image_url = resolve_img(req_image)
 
@@ -897,15 +905,23 @@ class CartView(APIView):
         item_price = float(variant.discount_price or variant.price) if variant and variant.price else float(request.data.get('price', 0))
         item_color = color if color else (variant.color if variant and variant.color else getattr(product, 'color_name', '') or 'Standard')
         item_name = req_name if req_name else product.name
+        item_sku = variant.sku if variant else sku_code or ''
+        item_variant_id = str(variant.id) if variant else f"{slugify(item_color)}_{slugify(size)}"
 
         items = self._cart(request)
-        item_key = f"{clean_product_id}_{slugify(item_color)}_{slugify(size)}"
+        item_key = f"{clean_product_id}_{item_variant_id}"
         
-        existing = next((i for i in items if (i.get('productId') == raw_product_id or i.get('productId') == clean_product_id) and str(i.get('size', '')).lower() == size.lower() and str(i.get('color', '')).lower() == item_color.lower()), None)
+        existing = next((i for i in items if i.get('id') == f'cart_{item_key}' or (
+            (i.get('productId') == raw_product_id or i.get('productId') == clean_product_id) and 
+            str(i.get('size', '')).lower() == size.lower() and 
+            str(i.get('color', '')).lower() == item_color.lower()
+        )), None)
 
         item = {
             'id': f'cart_{item_key}',
-            'productId': raw_product_id,
+            'productId': clean_product_id,
+            'variantId': str(variant.id) if variant else '',
+            'sku': item_sku,
             'name': item_name,
             'category': product.category.slug if product.category else 'suits',
             'price': item_price,
