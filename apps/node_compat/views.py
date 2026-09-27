@@ -1103,19 +1103,97 @@ class SellerProductDetailView(ProductDetailView):
     pass
 
 
+def serialize_order_for_seller(order):
+    items = []
+    for item in order.items.all():
+        details = item.variant_details or {}
+        if isinstance(details, str):
+            try:
+                import json
+                details = json.loads(details)
+            except Exception:
+                details = {}
+        v_img = ""
+        if item.variant:
+            img_obj = item.variant.images.first()
+            if img_obj:
+                v_img = str(img_obj.image)
+        items.append({
+            'id': str(item.id),
+            'product_title': item.product_name,
+            'sku': item.sku,
+            'quantity': item.quantity,
+            'price': float(item.price),
+            'size': details.get('size') or (item.variant.size if item.variant else 'M'),
+            'color': details.get('color') or (item.variant.color if item.variant else 'Standard'),
+            'image': v_img or "/assets/1540aab590cd7d478ad01cdb1a615d469ef2a808.png"
+        })
+    
+    ship_addr = order.shipping_address or {}
+    if isinstance(ship_addr, str):
+        try:
+            import json
+            ship_addr = json.loads(ship_addr)
+        except Exception:
+            ship_addr = {}
+            
+    rec_name = ship_addr.get('recipientName') or ship_addr.get('recipient_name') or ship_addr.get('full_name') or (order.customer.get_full_name() if order.customer else 'Customer')
+    
+    return {
+        'id': str(order.id),
+        '_id': str(order.id),
+        'status': order.status,
+        'createdAt': order.created_at.isoformat() if order.created_at else None,
+        'created_at': order.created_at.isoformat() if order.created_at else None,
+        'customer_name': rec_name,
+        'customer_email': getattr(order.customer, 'email', ''),
+        'totalAmount': float(order.total_amount),
+        'total_amount': float(order.total_amount),
+        'subtotal': float(order.subtotal),
+        'shipping_cost': float(order.shipping_cost),
+        'shippingAddress': {
+            'recipientName': rec_name,
+            'phone': ship_addr.get('phone') or ship_addr.get('phone_number') or '+91 9876543210',
+            'address': ship_addr.get('address') or ship_addr.get('street_address') or 'Standard Express Delivery',
+            'city': ship_addr.get('city') or 'Boutique Location',
+            'state': ship_addr.get('state') or 'State',
+            'postalCode': ship_addr.get('postalCode') or ship_addr.get('postal_code') or '000000'
+        },
+        'sellerItems': items,
+        'sellerEarnings': float(order.total_amount)
+    }
+
+
 class SellerOrdersView(APIView):
-    def get(self, request): return Response(list(Order.objects.order_by('-created_at').values()))
+    def get(self, request, order_id=None):
+        if order_id:
+            try:
+                order = Order.objects.filter(Q(id=order_id) | Q(id=str(order_id).replace('ORD-', ''))).first()
+                if not order:
+                    return Response({'message': 'Order not found'}, status=404)
+                return node_response(serialize_order_for_seller(order), 'Order details fetched successfully')
+            except Exception:
+                return Response({'message': 'Order not found'}, status=404)
+        
+        orders = Order.objects.order_by('-created_at')
+        return node_response([serialize_order_for_seller(o) for o in orders], 'Seller orders fetched successfully')
 
 
 class SellerOrderStatusView(APIView):
+    def get(self, request, order_id):
+        return SellerOrdersView().get(request, order_id=order_id)
+
     def put(self, request, order_id):
-        order = Order.objects.get(id=order_id)
+        order = Order.objects.filter(Q(id=order_id) | Q(id=str(order_id).replace('ORD-', ''))).first()
+        if not order:
+            return Response({'message': 'Order not found'}, status=404)
         new_status = request.data.get('status')
-        if not new_status: return Response({'message': 'Status is required'}, status=400)
+        if not new_status:
+            return Response({'message': 'Status is required'}, status=400)
         allowed = {choice[0] for choice in OrderStatus.choices}
         order.status = new_status if new_status in allowed else OrderStatus.PENDING
         order.save(update_fields=['status', 'updated_at'])
-        return Response({'message': 'Order status updated successfully', 'orderId': str(order.id), 'status': order.status})
+        return node_response(serialize_order_for_seller(order), 'Order status updated successfully')
 
 
 class AdminStatsView(APIView):
