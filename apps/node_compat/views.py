@@ -278,7 +278,17 @@ def sync_product_group_colors(main_product, variants_input, product_image_source
 
 
 def product_data(request, product):
-    variants = list(product.variants.select_related('inventory').prefetch_related('images').all())
+    if getattr(product, 'group_id', None):
+        group_products = list(Product.objects.filter(group_id=product.group_id, is_active=True).prefetch_related('variants__inventory', 'variants__images'))
+    else:
+        group_products = [product]
+
+    variants = []
+    for gp in group_products:
+        variants.extend(list(gp.variants.select_related('inventory').prefetch_related('images').all()))
+    if not variants:
+        variants = list(product.variants.select_related('inventory').prefetch_related('images').all())
+
     first = variants[0] if variants else None
     stock = sum(getattr(getattr(v, 'inventory', None), 'available_stock', 0) for v in variants)
     
@@ -587,7 +597,10 @@ def filter_and_paginate_products(request, qs):
                     col_imgs = p_info.get('images', [])
 
                 c_item = dict(p_info)
-                c_item['cardId'] = f"{p_info['id']}_{slugify(col_name)}"
+                card_id = f"{p_info['id']}_{slugify(col_name)}"
+                c_item['cardId'] = card_id
+                c_item['id'] = card_id
+                c_item['_id'] = card_id
                 c_item['colorName'] = col_name
                 c_item['colorHex'] = col_hex
                 c_item['image'] = col_imgs[0] if col_imgs else p_info['image']
@@ -677,7 +690,13 @@ class ProductListCreateView(APIView):
 class ProductDetailView(APIView):
     permission_classes = (permissions.AllowAny,)
     def get(self, request, product_id):
-        product = Product.objects.get(id=product_id)
+        real_id = str(product_id).split('_')[0]
+        try:
+            product = Product.objects.get(id=real_id)
+        except Exception:
+            product = Product.objects.filter(Q(id=real_id) | Q(slug=real_id)).first()
+        if not product:
+            return Response({'message': 'Product not found'}, status=404)
         return node_response(product_data(request, product), 'Product details fetched')
     def put(self, request, product_id):
         product = Product.objects.get(id=product_id)
