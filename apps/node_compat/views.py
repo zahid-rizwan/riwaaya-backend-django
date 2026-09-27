@@ -931,9 +931,13 @@ class CartView(APIView):
         item_variant_id = str(variant.id) if variant else f"{slugify(item_color)}-{slugify(size)}"
 
         items = self._cart(request)
-        item_key = f"{raw_product_id}_{slugify(item_color)}_{slugify(size)}"
+        color_slug = slugify(item_color) if item_color else 'standard'
+        size_slug = slugify(size) if size else 'm'
+        
         if variant and variant.id:
-            item_key = f"{clean_product_id}_{variant.id}_{slugify(size)}"
+            item_key = f"{clean_product_id}_{variant.id}_{color_slug}_{size_slug}"
+        else:
+            item_key = f"{clean_product_id}_{color_slug}_{size_slug}"
         
         existing = next((i for i in items if i.get('id') == f'cart_{item_key}' or (
             i.get('productId') in (raw_product_id, clean_product_id) and 
@@ -976,12 +980,25 @@ class CartItemView(CartView):
 
 class CartMergeView(CartView):
     def post(self, request):
-        guest_key = f'session:{request.data.get("sessionId", request.headers.get("x-session-id"))}'; items = self._cart(request); guest = request.session.get(guest_key, [])
+        guest_key = f'session:{request.data.get("sessionId", request.headers.get("x-session-id"))}'
+        items = self._cart(request)
+        guest = request.session.get(guest_key, [])
         for incoming in guest:
-            existing = next((i for i in items if i['productId'] == incoming['productId'] and i['size'] == incoming['size'] and i.get('color') == incoming.get('color')), None)
-            if existing: existing['quantity'] += incoming['quantity']
-            else: items.append(incoming)
-        request.session[guest_key] = []; return self._response(request, items, 'Guest cart merged into your account successfully')
+            inc_color = str(incoming.get('color', '')).strip().lower()
+            inc_size = str(incoming.get('size', '')).strip().lower()
+            existing = next((i for i in items if (
+                i.get('id') == incoming.get('id') or (
+                    i.get('productId') == incoming.get('productId') and 
+                    str(i.get('size', '')).strip().lower() == inc_size and 
+                    str(i.get('color', '')).strip().lower() == inc_color
+                )
+            )), None)
+            if existing:
+                existing['quantity'] += incoming.get('quantity', 1)
+            else:
+                items.append(incoming)
+        request.session[guest_key] = []
+        return self._response(request, items, 'Guest cart merged into your account successfully')
 
 
 class WishlistView(APIView):
