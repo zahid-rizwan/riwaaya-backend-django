@@ -966,7 +966,15 @@ class CartView(APIView):
             items.append(item)
 
         return self._response(request, items, 'Item added to bag')
-    def delete(self, request): return self._response(request, [], 'Cart cleared')
+
+    def delete(self, request):
+        sess_id = self._guest_session_id(request)
+        GuestCart.objects.filter(session_id=sess_id).delete()
+        if request.user.is_authenticated:
+            request.session[self._key(request)] = []
+        else:
+            request.session[f'session:{sess_id}'] = []
+        return self._response(request, [], 'Cart cleared')
 
 
 class CartItemView(CartView):
@@ -1001,22 +1009,40 @@ class CartMergeView(CartView):
         return self._response(request, items, 'Guest cart merged into your account successfully')
 
 
+def _clean_wishlist_ids(raw_list):
+    if not raw_list or not isinstance(raw_list, list):
+        return []
+    cleaned = []
+    for item in raw_list:
+        s = str(item or '').strip()
+        if s and s not in ('None', 'null', 'undefined', '[]', '{}', 'default'):
+            if s not in cleaned:
+                cleaned.append(s)
+    return cleaned
+
+
 class WishlistView(APIView):
+    def _key(self, request):
+        if request.user.is_authenticated:
+            return f'wishlist:{request.user.id}'
+        sess_id = request.headers.get('x-session-id') or request.query_params.get('sessionId') or 'guest'
+        return f'wishlist:session:{sess_id}'
+
     def get(self, request):
-        raw_ids = request.session.get(f'wishlist:{request.user.id}', [])
-        clean_ids = [str(i).strip() for i in raw_ids if i and str(i).strip() not in ('None', 'null', 'undefined')]
+        raw_ids = request.session.get(self._key(request), [])
+        clean_ids = _clean_wishlist_ids(raw_ids)
         return Response({'wishlist': clean_ids})
 
 
 class WishlistToggleView(WishlistView):
     def post(self, request):
-        key = f'wishlist:{request.user.id}'
+        key = self._key(request)
         raw_ids = request.session.get(key, [])
-        ids = [str(i).strip() for i in raw_ids if i and str(i).strip() not in ('None', 'null', 'undefined')]
+        ids = _clean_wishlist_ids(raw_ids)
         product_id = str(request.data.get('productId') or '').strip()
-        if product_id and product_id not in ('None', 'null', 'undefined'):
+        if product_id and product_id not in ('None', 'null', 'undefined', '[]', '{}', 'default'):
             if product_id in ids:
-                ids.remove(product_id)
+                ids = [i for i in ids if i != product_id]
             else:
                 ids.append(product_id)
         request.session[key] = ids
@@ -1025,11 +1051,11 @@ class WishlistToggleView(WishlistView):
 
 class WishlistSyncView(WishlistView):
     def post(self, request):
-        key = f'wishlist:{request.user.id}'
+        key = self._key(request)
         raw_ids = request.session.get(key, [])
         client_raw = request.data.get('wishlistIds') or []
-        client_ids = [str(i).strip() for i in client_raw if i and str(i).strip() not in ('None', 'null', 'undefined')]
-        session_ids = [str(i).strip() for i in raw_ids if i and str(i).strip() not in ('None', 'null', 'undefined')]
+        client_ids = _clean_wishlist_ids(client_raw)
+        session_ids = _clean_wishlist_ids(raw_ids)
         combined_ids = list(dict.fromkeys(session_ids + client_ids))
         request.session[key] = combined_ids
         return Response({'wishlist': combined_ids})
@@ -1073,7 +1099,14 @@ class OrderListCreateView(APIView):
         if not order_items: return Response({'message': 'No valid order items provided'}, status=400)
         address = request.data.get('shippingAddress', {}); order = Order.objects.create(customer=request.user, shipping_address=address, billing_address=address, subtotal=total, total_amount=total)
         for variant, price, quantity, item in order_items: OrderItem.objects.create(order=order, variant=variant, product_name=variant.product.name, sku=variant.sku, variant_details={'size': item.get('size'), 'color': item.get('color')}, price=price, quantity=quantity)
-        request.session[f'user:{request.user.id}'] = []; return Response({'_id': str(order.id), 'id': str(order.id), 'totalAmount': float(total), 'status': 'PENDING', 'orderItems': items, 'shippingAddress': address}, status=201)
+        # Clear GuestCart table and session cart upon order creation
+        sess_id = request.headers.get('x-session-id') or request.query_params.get('sessionId') or request.data.get('sessionId')
+        if sess_id:
+            GuestCart.objects.filter(session_id=sess_id).delete()
+            request.session[f'session:{sess_id}'] = []
+        if request.user.is_authenticated:
+            request.session[f'user:{request.user.id}'] = []
+        return Response({'_id': str(order.id), 'id': str(order.id), 'totalAmount': float(total), 'status': 'PENDING', 'orderItems': items, 'shippingAddress': address}, status=201)
 
 
 class OrderDetailView(APIView):
