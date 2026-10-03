@@ -37,6 +37,20 @@ def token_for(user):
     return str(refresh.access_token)
 
 
+def tokens_payload_for(user):
+    refresh = RefreshToken.for_user(user)
+    access_token = str(refresh.access_token)
+    refresh_token = str(refresh)
+    return {
+        'token': access_token,
+        'access': access_token,
+        'accessToken': access_token,
+        'refresh': refresh_token,
+        'refreshToken': refresh_token,
+        'user': user_data(user)
+    }
+
+
 def user_data(user):
     return {'id': str(user.id), 'name': user.get_full_name() or user.username,
             'email': user.email, 'phone': user.phone_number, 'role': user.role,
@@ -448,7 +462,7 @@ class AuthRegisterView(APIView):
             username = f'{username}_{User.objects.count()}'
         user = User.objects.create_user(username=username, email=email, password=data['password'],
                                         first_name=data['name'], phone_number=data.get('phone', ''))
-        return Response({'token': token_for(user), 'user': user_data(user)}, status=201)
+        return Response(tokens_payload_for(user), status=201)
 
 
 class AuthSellerRegisterView(AuthRegisterView):
@@ -477,7 +491,30 @@ class AuthLoginView(APIView):
         user = authenticate(username=user.username, password=password) if user else None
         if not user:
             return Response({'message': 'Invalid email or password'}, status=400)
-        return Response({'token': token_for(user), 'user': user_data(user)})
+        return Response(tokens_payload_for(user))
+
+
+class AuthTokenRefreshView(APIView):
+    permission_classes = (permissions.AllowAny,)
+
+    def post(self, request):
+        refresh_str = request.data.get('refresh') or request.data.get('refreshToken')
+        if not refresh_str:
+            return Response({'message': 'Refresh token is required'}, status=400)
+        try:
+            refresh = RefreshToken(refresh_str)
+            new_access = str(refresh.access_token)
+            new_refresh = str(refresh)
+            return Response({
+                'success': True,
+                'token': new_access,
+                'access': new_access,
+                'accessToken': new_access,
+                'refresh': new_refresh,
+                'refreshToken': new_refresh
+            })
+        except Exception as e:
+            return Response({'success': False, 'message': 'Invalid or expired refresh token', 'error': str(e)}, status=401)
 
 
 class AuthMeView(APIView):
@@ -502,7 +539,7 @@ class AuthVerifyOtpView(APIView):
         user = User.objects.filter(phone_number__icontains=digits[-10:]).first()
         if not user:
             user = User.objects.create_user(username=f'{digits}@phone.riwaaya.com', email=f'{digits}@phone.riwaaya.com', password=f'phone_{digits}', phone_number=phone, first_name=f'User {digits[-4:]}')
-        return Response({'token': token_for(user), 'user': user_data(user)})
+        return Response(tokens_payload_for(user))
 
 
 def filter_and_paginate_products(request, qs):
